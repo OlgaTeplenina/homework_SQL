@@ -1,0 +1,161 @@
+--=============== МОДУЛЬ 5. РАБОТА С POSTGRESQL =======================================
+
+SET search_path TO public;
+
+--======== ОСНОВНАЯ ЧАСТЬ ==============
+
+--ЗАДАНИЕ №1
+--Сделайте запрос к таблице payment и с помощью оконных функций добавьте вычисляемые колонки согласно условиям:
+--	Пронумеруйте все платежи от 1 до N по дате
+
+select payment_id, payment_date, 
+       row_number() over (order by payment_date) as column_1
+from payment 
+
+
+--	Пронумеруйте платежи для каждого покупателя, сортировка платежей должна быть по дате
+
+select customer_id, payment_id, payment_date, 
+    row_number() over (order by payment_date) as column_1,      
+    row_number() over (partition by customer_id order by payment_date) as column_2
+from payment 
+order by customer_id, payment_date
+
+
+--	Посчитайте нарастающим итогом сумму всех платежей для каждого покупателя, сортировка должна быть сперва по дате платежа, а затем по сумме платежа от наименьшей к большей
+
+select customer_id, payment_id, payment_date, 
+       row_number() over (order by payment_date) as column_1,
+       row_number() over (partition by customer_id order by payment_date) as column_2,
+       sum(amount) over (partition by customer_id order by payment_date) as column_3
+from payment 
+order by customer_id, payment_date
+
+
+select customer_id, payment_id, payment_date, 
+       row_number() over (order by payment_date) as column_1,
+       row_number() over (partition by customer_id order by payment_date) as column_2,
+       sum(amount) over (partition by customer_id order by payment_date, amount) as column_3
+from payment 
+order by customer_id
+
+--	Пронумеруйте платежи для каждого покупателя по стоимости платежа от наибольших к меньшим так, чтобы платежи с одинаковым значением имели одинаковое значение номера.
+
+select customer_id, payment_id, payment_date,
+       row_number() over (order by payment_date) as column_1,
+       row_number() over (partition by customer_id order by payment_date) as column_2,
+       sum(amount) over (partition by customer_id order by payment_date) as column_3,
+       rank() over (partition by customer_id order by amount desc) as column_4
+from payment 
+order by customer_id, payment_date
+
+
+--ЗАДАНИЕ №2
+-- С помощью оконной функции выведите для каждого покупателя стоимость платежа 
+-- и стоимость платежа из предыдущей строки со значением по умолчанию 0.0 с сортировкой по дате.
+ 
+ select customer_id, payment_id, payment_date, amount,
+        coalesce(lag(amount) over (partition by customer_id order by payment_date), 0.0) as "last_amount"
+ from payment 
+
+  select customer_id, payment_id, payment_date, amount,
+        lag(amount, 1, 0.0) over (partition by customer_id order by payment_date) as "last_amount"
+ from payment
+ 
+--ЗАДАНИЕ №3
+-- С помощью оконной функции определите, на сколько каждый 
+-- следующий платеж покупателя больше или меньше текущего.
+
+ select customer_id, payment_id, payment_date, amount,
+        amount - coalesce(lead(amount) over (partition by customer_id order by payment_date), 0.0)  as "difference"
+ from payment 
+
+ 
+--ЗАДАНИЕ №4
+-- С помощью оконной функции для каждого покупателя выведите данные о его последней оплате аренды.
+
+select customer_id, payment_id, payment_date, amount
+from 
+    (select customer_id, payment_id, payment_date, amount,
+     row_number() over (partition by customer_id order by payment_date desc) as d
+    from payment) as p
+where d < 2 
+
+
+--======== ДОПОЛНИТЕЛЬНАЯ ЧАСТЬ ==============
+
+--ЗАДАНИЕ №1
+--С помощью оконной функции выведите для каждого сотрудника сумму продаж за март 2007 года
+-- с нарастающим итогом по каждому сотруднику и 
+-- по каждой дате продажи (без учёта времени) с сортировкой по дате.
+
+    
+select *, sum(sum_amount) over (partition by staff_id order by payment_date)
+from(
+    select staff_id, payment_date::date, sum(amount) as "sum_amount"
+    from payment p 
+    where payment_date::date between '2007-03-01' and '2007-03-31'
+    group by staff_id, payment_date::date
+    ) as d  
+    
+    
+--ЗАДАНИЕ №2
+--10 апреля 2007 года в магазинах проходила акция: покупатель, совершивший каждый 100ый платеж
+-- получал дополнительную скидку на следующую аренду.
+-- С помощью оконной функции выведите всех покупателей, которые в день проведения акции получили скидку.
+
+select *
+from(
+     select customer_id, payment_id, payment_date,
+       row_number() over (order by payment_date) as n
+     from payment
+     where payment_date::date = '2007-04-10') as d
+where n%100=0
+
+
+
+--ЗАДАНИЕ №3
+--Для каждой страны определите и выведите одним SQL-запросом покупателей, которые попадают под условия:
+-- 1. покупатель, арендовавший наибольшее количество фильмов
+-- 2. покупатель, арендовавший фильмов на самую большую сумму
+
+
+with cte as (
+	select c.customer_id, concat(c.last_name, ' ', c.first_name) as "Покупатель", country, count(i.film_id) as "Количество фильмов", ROUND(sum(p.amount)) as "Общая стоимость платежей"
+	from customer c 
+	inner join rental r on c.customer_id = r.customer_id 
+	inner join inventory i on r.inventory_id = i.inventory_id 
+	inner join payment p on r.rental_id = p.rental_id 
+	inner join address a on a.address_id = c.address_id
+	inner join city ci on ci.city_id = a.city_id 
+	inner join country co on ci.country_id = co.country_id
+	group by c.customer_id, country 
+    order by country), 
+    cte2 as (
+    select c.customer_id, concat(c.last_name, ' ', c.first_name) as "Покупатель", country, rental_date, 
+	row_number() over (partition by country order by rental_date desc) as d    
+	from rental r  
+	inner join customer c on c.customer_id = r.customer_id 
+	inner join inventory i on r.inventory_id = i.inventory_id 
+	inner join payment p on r.rental_id = p.rental_id 
+	inner join address a on a.address_id = c.address_id
+	inner join city ci on ci.city_id = a.city_id 
+	inner join country co on ci.country_id = co.country_id
+	order by country)
+select m.country, "Покупатель, макс кол-во", "Покупатель, макс сумма", "Последний покупатель"
+from
+    (select country, "Покупатель" as "Покупатель, макс кол-во"
+    from 
+    (select country, "Покупатель", "Количество фильмов", row_number() over (partition by country order by "Количество фильмов" desc) as t
+     from cte) as d 
+where t=1) as m  
+inner join 
+    (select country, "Покупатель" as "Покупатель, макс сумма", customer_id
+    from 
+       (select country, "Покупатель", customer_id, "Количество фильмов", row_number() over (partition by country order by "Общая стоимость платежей" desc) as s
+        from cte) as d
+     where s=1) as l  on l.country=m.country  
+inner join
+     (select "Покупатель" as "Последний покупатель", country, rental_date, d
+    from cte2 
+    where d=1) as u on l.country=u.country
